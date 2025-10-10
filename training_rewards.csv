@@ -1,0 +1,4 @@
+episode,reward,episode_length,epsilon,win
+1,21,3057,0.9995,True
+2,-19,3642,0.9990002500000001,False
+3,19,3692,0.9985007498750001,True
