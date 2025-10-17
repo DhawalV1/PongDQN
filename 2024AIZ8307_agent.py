@@ -1,8 +1,4 @@
-"""
-Student Agent Implementation for PettingZoo Pong
-This implements a DQN agent following the Nature DQN architecture
-"""
-
+# --- START OF FILE agent.py ---
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -78,7 +74,7 @@ class StudentAgent:
         self.epsilon_decay = 0.9995
         self.epsilon = self.epsilon_start
         self.lr = 0.00025
-        self.target_update_freq = 1000
+        self.target_update_freq = 10000
         self.learning_starts = 10000
         self.use_double_dqn = use_double_dqn
         
@@ -247,7 +243,8 @@ class StudentAgent:
             'epsilon': self.epsilon,
             'steps': self.steps
         }, filepath)
-        print(f"Model saved to {filepath}")
+
+        # print(f"Model saved to {filepath}")
     
     def load_model(self, model_data):
         """

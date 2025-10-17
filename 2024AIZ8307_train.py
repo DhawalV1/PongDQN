@@ -16,6 +16,12 @@ import random
 import sys
 import os
 
+import matplotlib
+matplotlib.use("Agg")  # <--- Add this line
+import matplotlib.pyplot as plt
+# import pandas as pd
+import os
+
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -106,7 +112,27 @@ def train_dqn_agent(num_episodes=2000, save_path=None, seed=42):
     
     total_steps = 0
     
+    # ---------------------------------------------------------
+    # Hybrid Training Loop: Simple Opponent → Self-Play
+    # ---------------------------------------------------------
+    frozen_opponent = None
+    switch_to_selfplay = 1000     # switch after 1/3rd training
+    update_frozen_every = 200                   # update frozen copy every N episodes
+
     for episode in range(num_episodes):
+
+        # Switch to self-play after threshold
+        if episode == switch_to_selfplay:
+            print("\n=== Switching to SELF-PLAY mode ===")
+            frozen_opponent = StudentAgent(agent_id=1, action_space=action_space)
+            frozen_opponent.policy_network.load_state_dict(agent.policy_network.state_dict())  # clone weights
+            frozen_opponent.policy_network.eval()
+        
+        # Update frozen opponent periodically (for stability)
+        if frozen_opponent and (episode + 1) % update_frozen_every == 0:
+            print(f"\n[Update] Refreshing frozen opponent at episode {episode + 1}")
+            frozen_opponent.policy_network.load_state_dict(agent.policy_network.state_dict())
+            frozen_opponent.policy_network.eval()
         # Reset environment
         obs, _ = env.reset()
         done = False
@@ -118,10 +144,16 @@ def train_dqn_agent(num_episodes=2000, save_path=None, seed=42):
         
         # Episode loop
         while not done and episode_length < 10000:
-            # Select actions
             action0 = agent.act(obs[0])
-            action1 = simple_opponent_action(obs[1])
-            
+
+            # Choose opponent policy
+            if frozen_opponent is None:
+                action1 = simple_opponent_action(obs[1])   # phase 1: rule-based
+            else:
+                with torch.no_grad():
+                    action1 = frozen_opponent.act(obs[1])  # phase 2: self-play
+
+
             actions = [action0, action1]
             
             # Execute actions
@@ -151,13 +183,21 @@ def train_dqn_agent(num_episodes=2000, save_path=None, seed=42):
         win_history.append(win)
         
         # Print progress
-        if (episode + 1) % 10 == 0 or episode == 0:
+        if (episode + 1) % 100 == 0 or episode == 0:
             avg_reward = np.mean(episode_rewards[-100:]) if len(episode_rewards) >= 100 else np.mean(episode_rewards)
             avg_length = np.mean(episode_lengths[-100:]) if len(episode_lengths) >= 100 else np.mean(episode_lengths)
             win_rate = np.mean(win_history[-100:]) if len(win_history) >= 100 else np.mean(win_history)
             
             print(f"{episode+1:<8} {episode_reward:<10.1f} {episode_length:<8} "
-                  f"{agent.get_epsilon():<10.3f} {win_rate*100:<8.1f}%")
+                  f"{agent.get_epsilon():<10.3f} {win_rate*100:<8.1f}%",flush=True)
+
+        # ---------- SAVE MODEL PERIODICALLY ----------
+        if (episode + 1) % 400 == 0:
+            save_file = save_path if save_path else f"{entry_number}_model.pt"
+            # Optionally, include episode number in filename to avoid overwriting
+            save_file = save_file.replace(".pt", f"_ep{episode+1}.pt")
+            agent.save_model(save_file)
+            print(f"[Checkpoint] Model saved at episode {episode+1} to {save_file}")
         
         # Periodic detailed statistics
         if (episode + 1) % 100 == 0:
@@ -202,32 +242,37 @@ def train_dqn_agent(num_episodes=2000, save_path=None, seed=42):
         # ---------------------------------------------------------
     # Save training metrics (plot + CSV)
     # ---------------------------------------------------------
-    import matplotlib
-    matplotlib.use("Agg")  # <--- Add this line
-    import matplotlib.pyplot as plt
-    import pandas as pd
-    import os
-
+    
+    import csv 
     # Create directory if not provided
     output_dir = os.path.dirname(save_path) if save_path else "."
     os.makedirs(output_dir, exist_ok=True)
 
     # ---- Save rewards to CSV ----
     csv_path = os.path.join(output_dir, "training_rewards.csv")
-    df = pd.DataFrame({
-        "episode": np.arange(1, len(episode_rewards) + 1),
-        "reward": episode_rewards,
-        "episode_length": episode_lengths,
-        "epsilon": epsilon_history,
-        "win": win_history
-    })
-    df.to_csv(csv_path, index=False)
+    with open(csv_path, mode="w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["episode", "reward", "episode_length", "epsilon", "win"])
+        for i in range(len(episode_rewards)):
+            writer.writerow([
+                i + 1,
+                episode_rewards[i],
+                episode_lengths[i],
+                epsilon_history[i],
+                win_history[i]
+            ])
     print(f"Training statistics saved to: {csv_path}")
 
     # ---- Plot rewards ----
     plt.figure(figsize=(10, 6))
     plt.plot(episode_rewards, label="Episode Reward", alpha=0.6)
-    plt.plot(pd.Series(episode_rewards).rolling(50).mean(), label="Moving Avg (50)", linewidth=2)
+
+    # Compute moving average using numpy
+    window = 50
+    if len(episode_rewards) >= window:
+        moving_avg = np.convolve(episode_rewards, np.ones(window)/window, mode='valid')
+        plt.plot(range(window - 1, len(episode_rewards)), moving_avg, label=f"Moving Avg ({window})", linewidth=2)
+
     plt.xlabel("Episode")
     plt.ylabel("Reward")
     plt.title("DQN Training Progress")
